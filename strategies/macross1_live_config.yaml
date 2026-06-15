@@ -14,7 +14,7 @@ environment:
   - key: PHEMEX_API_SECRET
     value-source: SYSTEM_ENV
   - key: EXTRA_OUTPUTS
-    value: Position,TradeFlows,MovingAverageCrossover,PnL
+    value: Position,TradeFlows,MovingAverageCrossover,AverageTrueRange,PnL
 strategies:
   - name: MovingAverageCrossover
     module: macross1
@@ -30,6 +30,12 @@ strategies:
         value: 30
       - key: MACROSS_STOP_PCT
         value: 2.0
+      - key: MACROSS_ATR_WINDOW
+        value: 14
+      - key: MACROSS_ATR_STOP_MULT
+        value: 2.0
+      - key: MACROSS_TREND_STRENGTH_MULT
+        value: 0.5
       - key: MACROSS_QTY
         value: 100000
       - key: MACROSS_COOL_SECONDS

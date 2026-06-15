@@ -45,6 +45,36 @@ class ComputeMovingAverageCrossover(Function):
             self._update(MovingAverageCrossover(fast, slow))
 
 
+class ComputeAverageTrueRange(Function):
+    """
+    Computes the Average True Range (ATR) from a stream of OHLC candles. ATR is a classic
+    volatility measure: the mean of the True Range over a window, where True Range for each
+    candle is the greatest of (high - low), |high - prev_close| and |low - prev_close|.
+
+    The indicator buffers ``window + 1`` candles so it always has a previous close available
+    for every True Range in the window, and only becomes valid once that buffer is full.
+    """
+    def __init__(self, network: Network, ohlc: Signal, window: int):
+        super().__init__(network, [ohlc])
+        self.ohlc = ohlc
+        self.window = window
+        self.buffer = WindowWithCount(network, ohlc, window + 1)
+
+    def _call(self):
+        if self.buffer.is_valid():
+            candles = self.buffer.get_value()
+            true_ranges = []
+            for i in range(1, len(candles)):
+                prev_close = candles[i - 1].close_px
+                cur = candles[i]
+                true_range = max(cur.high_px - cur.low_px,
+                                 abs(cur.high_px - prev_close),
+                                 abs(cur.low_px - prev_close))
+                true_ranges.append(true_range)
+            if true_ranges:
+                self._update(float(np.mean(true_ranges)))
+
+
 class BollingerBands:
     def __init__(self, sma, upper, lower):
         self.sma = sma

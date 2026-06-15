@@ -10,7 +10,7 @@ from tau.event import Do
 from tau.signal import Map, BufferWithTime
 
 from serenity.algo.api import Strategy, StrategyContext
-from serenity.signal.indicators import ComputeMovingAverageCrossover
+from serenity.signal.indicators import ComputeMovingAverageCrossover, ComputeAverageTrueRange
 from serenity.signal.marketdata import ComputeOHLC
 from serenity.trading.api import Side, OrderStatus, ExecutionReport, Reject
 from serenity.trading.oms import OrderPlacerService
@@ -24,10 +24,19 @@ class MovingAverageCrossoverStrategy1(Strategy):
       * enters a long position on a "golden cross" (fast crosses above slow), and
       * flattens the position on a "death cross" (fast crosses below slow).
 
-    A protective stop is placed a configurable percentage below the entry price so a single
-    adverse move is bounded. This is a well-understood, sound strategy -- it harvests
-    sustained trends and pays small premiums in choppy, range-bound markets. It is not a
-    money printer: expect a modest win rate with winners larger than losers.
+    Two volatility-aware refinements make it more robust than a naive crossover:
+
+      * **Adaptive stops.** The protective stop is placed ``MACROSS_ATR_STOP_MULT`` Average
+        True Ranges below the entry price, so the stop widens in volatile regimes and
+        tightens in calm ones rather than using a fixed percentage. If ATR is not yet
+        available it falls back to a fixed ``MACROSS_STOP_PCT`` stop.
+      * **Trend-strength filter.** A golden cross is only acted upon when the gap between the
+        fast and slow averages exceeds ``MACROSS_TREND_STRENGTH_MULT`` ATRs, which rejects
+        the weak, noise-driven crossovers that bleed money in choppy, range-bound markets.
+
+    This is a well-understood, sound strategy -- it harvests sustained trends and pays small
+    premiums when trends fail to develop. It is not a money printer: expect a modest win rate
+    with winners larger than losers.
     """
 
     logger = logging.getLogger(__name__)
@@ -40,6 +49,9 @@ class MovingAverageCrossoverStrategy1(Strategy):
         fast_window = int(ctx.getenv('MACROSS_FAST_WINDOW', 10))
         slow_window = int(ctx.getenv('MACROSS_SLOW_WINDOW', 30))
         stop_pct = float(ctx.getenv('MACROSS_STOP_PCT', 2.0)) / 100.0
+        atr_window = int(ctx.getenv('MACROSS_ATR_WINDOW', 14))
+        atr_stop_mult = float(ctx.getenv('MACROSS_ATR_STOP_MULT', 2.0))
+        trend_strength_mult = float(ctx.getenv('MACROSS_TREND_STRENGTH_MULT', 0.5))
         bin_minutes = int(ctx.getenv('MACROSS_BIN_MINUTES', 5))
         cooling_period_seconds = int(ctx.getenv('MACROSS_COOL_SECONDS', 15))
         exchange_code, instrument_code = ctx.getenv('TRADING_INSTRUMENT').split(':')
@@ -49,6 +61,7 @@ class MovingAverageCrossoverStrategy1(Strategy):
         prices = ComputeOHLC(network, trades_bin)
         close_prices = Map(network, prices, lambda x: x.close_px)
         macross = ComputeMovingAverageCrossover(network, close_prices, fast_window, slow_window)
+        atr = ComputeAverageTrueRange(network, prices, atr_window)
 
         op_service = ctx.get_order_placer_service()
         oms = op_service.get_order_manager_service()
@@ -79,6 +92,10 @@ class MovingAverageCrossoverStrategy1(Strategy):
             'fast': macross.get_value().fast,
             'slow': macross.get_value().slow,
             'spread': macross.get_value().spread()
+        }))
+        Do(scheduler.get_network(), atr, lambda: dcs.capture('AverageTrueRange', {
+            'time': pd.to_datetime(scheduler.get_time(), unit='ms'),
+            'atr': atr.get_value()
         }))
 
         # debug log basic marketdata
@@ -156,10 +173,23 @@ class MovingAverageCrossoverStrategy1(Strategy):
                             self.strategy.logger.info('Cooling off -- not trading again on rapidly repeated signal')
                             return False
 
+                        # trend-strength filter: skip weak crossovers whose fast/slow gap is
+                        # small relative to current volatility (ATR), which are mostly noise
+                        atr_value = atr.get_value() if atr.is_valid() else None
+                        if atr_value is not None and spread < trend_strength_mult * atr_value:
+                            self.strategy.logger.info(f'Golden cross too weak (spread={spread:.4f} < '
+                                                      f'{trend_strength_mult} * ATR={atr_value:.4f}) -- skipping')
+                            return False
+
                         last_px = close_prices.get_value()
-                        stop_px = last_px * (1 - stop_pct)
+                        # adaptive stop: ATR-based when available, else fixed percentage
+                        if atr_value is not None:
+                            stop_px = last_px - atr_stop_mult * atr_value
+                        else:
+                            stop_px = last_px * (1 - stop_pct)
                         self.strategy.logger.info(f'Golden cross at {scheduler.get_clock().get_time()}, '
-                                                  f'enter long: last_px = {last_px}, stop_px = {stop_px}')
+                                                  f'enter long: last_px = {last_px}, stop_px = {stop_px}, '
+                                                  f'atr = {atr_value}')
 
                         order = self.op.get_order_factory().create_market_order(Side.BUY, contract_qty, instrument)
                         self.stop = self.op.get_order_factory().create_stop_order(Side.SELL, contract_qty, stop_px,
