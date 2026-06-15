@@ -1,0 +1,29 @@
+api-version: v1Beta
+environment:
+  - key: EXCHANGE_ID
+    value: autofill
+  - key: EXCHANGE_INSTANCE
+    value: prod
+  - key: EXCHANGE_ACCOUNT
+    value: 9019590001
+  - key: EXTRA_OUTPUTS
+    value: Position,MovingAverageCrossover,PnL
+strategy:
+  name: MovingAverageCrossover
+  module: macross1
+  strategy-class: MovingAverageCrossoverStrategy1
+  environment:
+    - key: TRADING_INSTRUMENT
+      value: PHEMEX:BTCUSD
+    - key: MACROSS_BIN_MINUTES
+      value: 5
+    - key: MACROSS_FAST_WINDOW
+      value: 10
+    - key: MACROSS_SLOW_WINDOW
+      value: 30
+    - key: MACROSS_STOP_PCT
+      value: 2.0
+    - key: MACROSS_QTY
+      value: 100000
+    - key: MACROSS_COOL_SECONDS
+      value: 15

@@ -4,6 +4,47 @@ from tau.core import Network, Signal
 from tau.signal import Function, WindowWithCount
 
 
+class MovingAverageCrossover:
+    """
+    Value class holding the fast and slow simple moving averages used by a dual
+    moving-average crossover trend-following strategy.
+    """
+    def __init__(self, fast: float, slow: float):
+        self.fast = fast
+        self.slow = slow
+
+    def spread(self) -> float:
+        """
+        Signed distance between the fast and slow averages. Positive values indicate an
+        up-trend (fast above slow); negative values a down-trend.
+        """
+        return self.fast - self.slow
+
+    def __str__(self) -> str:
+        return f'MACross(fast={self.fast}, slow={self.slow}, spread={self.spread()})'
+
+
+class ComputeMovingAverageCrossover(Function):
+    """
+    Computes a fast and a slow simple moving average from a single price stream. The
+    indicator only becomes valid once enough prices have accumulated to fill the slow
+    window, so both averages cover a full window before any crossover is acted upon.
+    """
+    def __init__(self, network: Network, prices: Signal, fast_window: int, slow_window: int):
+        if fast_window >= slow_window:
+            raise ValueError(f'fast_window ({fast_window}) must be less than slow_window ({slow_window})')
+        super().__init__(network, [prices])
+        self.prices = prices
+        self.fast_buffer = WindowWithCount(network, prices, fast_window)
+        self.slow_buffer = WindowWithCount(network, prices, slow_window)
+
+    def _call(self):
+        if self.fast_buffer.is_valid() and self.slow_buffer.is_valid():
+            fast = np.array(self.fast_buffer.get_value()).mean()
+            slow = np.array(self.slow_buffer.get_value()).mean()
+            self._update(MovingAverageCrossover(fast, slow))
+
+
 class BollingerBands:
     def __init__(self, sma, upper, lower):
         self.sma = sma
