@@ -3,6 +3,8 @@ import numpy as np
 from tau.core import Network, Signal
 from tau.signal import Function, WindowWithCount
 
+from serenity.signal.calc import simple_moving_average, average_true_range
+
 
 class MovingAverageCrossover:
     """
@@ -40,8 +42,8 @@ class ComputeMovingAverageCrossover(Function):
 
     def _call(self):
         if self.fast_buffer.is_valid() and self.slow_buffer.is_valid():
-            fast = np.array(self.fast_buffer.get_value()).mean()
-            slow = np.array(self.slow_buffer.get_value()).mean()
+            fast = simple_moving_average(self.fast_buffer.get_value())
+            slow = simple_moving_average(self.slow_buffer.get_value())
             self._update(MovingAverageCrossover(fast, slow))
 
 
@@ -62,17 +64,8 @@ class ComputeAverageTrueRange(Function):
 
     def _call(self):
         if self.buffer.is_valid():
-            candles = self.buffer.get_value()
-            true_ranges = []
-            for i in range(1, len(candles)):
-                prev_close = candles[i - 1].close_px
-                cur = candles[i]
-                true_range = max(cur.high_px - cur.low_px,
-                                 abs(cur.high_px - prev_close),
-                                 abs(cur.low_px - prev_close))
-                true_ranges.append(true_range)
-            if true_ranges:
-                self._update(float(np.mean(true_ranges)))
+            candles = [(c.high_px, c.low_px, c.close_px) for c in self.buffer.get_value()]
+            self._update(average_true_range(candles))
 
 
 class BollingerBands:

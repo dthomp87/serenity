@@ -33,6 +33,9 @@ class MovingAverageCrossoverStrategy1(Strategy):
       * **Trend-strength filter.** A golden cross is only acted upon when the gap between the
         fast and slow averages exceeds ``MACROSS_TREND_STRENGTH_MULT`` ATRs, which rejects
         the weak, noise-driven crossovers that bleed money in choppy, range-bound markets.
+      * **Trailing stop.** While long, the protective stop ratchets up behind new highs (and
+        never down), locking in open profit and letting winners run -- the core source of
+        edge for a trend follower. Disable with ``MACROSS_TRAILING_STOP=false``.
 
     This is a well-understood, sound strategy -- it harvests sustained trends and pays small
     premiums when trends fail to develop. It is not a money printer: expect a modest win rate
@@ -52,6 +55,7 @@ class MovingAverageCrossoverStrategy1(Strategy):
         atr_window = int(ctx.getenv('MACROSS_ATR_WINDOW', 14))
         atr_stop_mult = float(ctx.getenv('MACROSS_ATR_STOP_MULT', 2.0))
         trend_strength_mult = float(ctx.getenv('MACROSS_TREND_STRENGTH_MULT', 0.5))
+        trailing_stop = str(ctx.getenv('MACROSS_TRAILING_STOP', 'true')).lower() in ('true', '1', 'yes')
         bin_minutes = int(ctx.getenv('MACROSS_BIN_MINUTES', 5))
         cooling_period_seconds = int(ctx.getenv('MACROSS_COOL_SECONDS', 15))
         exchange_code, instrument_code = ctx.getenv('TRADING_INSTRUMENT').split(':')
@@ -119,6 +123,7 @@ class MovingAverageCrossoverStrategy1(Strategy):
                 self.last_exit = 0
                 self.cum_pnl = 0
                 self.stop = None
+                self.stop_px = 0
                 self.trader_state = TraderState.FLAT
                 self.last_trade_time = 0
                 # tracks the sign of (fast - slow) on the previous update so we can detect a
@@ -196,20 +201,40 @@ class MovingAverageCrossoverStrategy1(Strategy):
                                                                                   instrument)
                         self.op.submit(order)
                         self.op.submit(self.stop)
+                        self.stop_px = stop_px
 
                         self.last_trade_time = scheduler.get_time()
                         self.trader_state = TraderState.GOING_LONG
-                    elif self.trader_state == TraderState.LONG and death_cross:
-                        self.strategy.logger.info(f'Death cross at {scheduler.get_clock().get_time()}, '
-                                                  f'exiting long position')
+                    elif self.trader_state == TraderState.LONG:
+                        # trailing stop: ratchet the protective stop up behind new highs,
+                        # never loosening it, so open profit is progressively locked in
+                        if trailing_stop and self.stop is not None:
+                            last_px = close_prices.get_value()
+                            atr_value = atr.get_value() if atr.is_valid() else None
+                            if atr_value is not None:
+                                candidate_stop = last_px - atr_stop_mult * atr_value
+                            else:
+                                candidate_stop = last_px * (1 - stop_pct)
+                            if candidate_stop > self.stop_px:
+                                self.strategy.logger.info(f'Trailing stop up: {self.stop_px} -> {candidate_stop}')
+                                self.op.cancel(self.stop)
+                                self.stop = self.op.get_order_factory().create_stop_order(Side.SELL, contract_qty,
+                                                                                          candidate_stop, instrument)
+                                self.op.submit(self.stop)
+                                self.stop_px = candidate_stop
 
-                        order = self.op.get_order_factory().create_market_order(Side.SELL, contract_qty, instrument)
-                        self.op.submit(order)
-                        if self.stop is not None:
-                            self.op.cancel(self.stop)
-                            self.stop = None
+                        if death_cross:
+                            self.strategy.logger.info(f'Death cross at {scheduler.get_clock().get_time()}, '
+                                                      f'exiting long position')
 
-                        self.trader_state = TraderState.FLATTENING
+                            order = self.op.get_order_factory().create_market_order(Side.SELL, contract_qty,
+                                                                                    instrument)
+                            self.op.submit(order)
+                            if self.stop is not None:
+                                self.op.cancel(self.stop)
+                                self.stop = None
+
+                            self.trader_state = TraderState.FLATTENING
                 return False
 
         network.connect(macross, CrossoverTrader(scheduler, op_service, self))

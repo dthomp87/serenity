@@ -36,6 +36,8 @@ strategies:
         value: 2.0
       - key: MACROSS_TREND_STRENGTH_MULT
         value: 0.5
+      - key: MACROSS_TRAILING_STOP
+        value: true
       - key: MACROSS_QTY
         value: 100000
       - key: MACROSS_COOL_SECONDS
